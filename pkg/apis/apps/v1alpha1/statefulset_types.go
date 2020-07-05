@@ -179,6 +179,9 @@ type StatefulSetStatus struct {
 	// indicated by updateRevision.
 	UpdatedReplicas int32 `json:"updatedReplicas"`
 
+	// OfflinedReplicas is the number of Pods offlined by the StatefulSet controller.
+	OfflinedReplicas int32 `json:"offlinedReplicas"`
+
 	// currentRevision, if not empty, indicates the version of the StatefulSet used to generate Pods in the
 	// sequence [0,currentReplicas).
 	CurrentRevision string `json:"currentRevision,omitempty"`
@@ -221,6 +224,7 @@ const (
 // +kubebuilder:printcolumn:name="DESIRED",type="integer",JSONPath=".spec.replicas",description="The desired number of pods."
 // +kubebuilder:printcolumn:name="CURRENT",type="integer",JSONPath=".status.replicas",description="The number of currently all pods."
 // +kubebuilder:printcolumn:name="UPDATED",type="integer",JSONPath=".status.updatedReplicas",description="The number of pods updated."
+// +kubebuilder:printcolumn:name="OFFLINED",type="integer",JSONPath=".status.offlinedReplicas",description="The number of pods offlined."
 // +kubebuilder:printcolumn:name="READY",type="integer",JSONPath=".status.readyReplicas",description="The number of pods ready."
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp",description="CreationTimestamp is a timestamp representing the server time when this object was created. It is not guaranteed to be set in happens-before order across separate operations. Clients may not set this value. It is represented in RFC3339 form and is in UTC."
 type StatefulSet struct {

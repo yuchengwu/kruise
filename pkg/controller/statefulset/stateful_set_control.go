@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	intstrutil "k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/controller/history"
@@ -303,10 +304,24 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	// slice that will contain all Pods such that 0 <= getOrdinal(pod) < set.Spec.Replicas
 	replicas := make([]*v1.Pod, replicaCount)
 	// slice that will contain all Pods such that set.Spec.Replicas <= getOrdinal(pod)
+	// and pods that are marked offline.
 	condemned := make([]*v1.Pod, 0, len(pods))
+	// slice that will contain all Pods ordianls in annotations["offline-pod.kruise.io/ordinal-list"]
+	offlined := make([]*v1.Pod, 0, len(pods))
 	unhealthy := 0
 	firstUnhealthyOrdinal := math.MaxInt32
 	var firstUnhealthyPod *v1.Pod
+
+	ordSlice, err := ordinalSliceFromAnnotation(set.GetAnnotations(), replicaCount)
+	if err != nil {
+		klog.Errorf("extract offline ordinal slice, err: %+v", err)
+	}
+	offlineOrdinalSet := sets.NewInt(ordSlice...)
+	for i := 0; i < replicaCount; i++ {
+		if offlineOrdinalSet.Has(i) {
+			status.OfflinedReplicas++
+		}
+	}
 
 	// First we partition pods into two lists valid replicas and condemned Pods
 	for i := range pods {
@@ -331,6 +346,11 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 			// if the ordinal of the pod is within the range of the current number of replicas,
 			// insert it at the indirection of its ordinal
 			replicas[ord] = pods[i]
+			// if the ordianl is marked offline then add it to the offline list
+			if offlineOrdinalSet.Has(ord) {
+				offlined = append(offlined, pods[i])
+				status.OfflinedReplicas--
+			}
 
 		} else if ord >= replicaCount {
 			// if the ordinal is greater than the number of replicas add it to the condemned list
@@ -338,9 +358,15 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 		}
 		// If the ordinal could not be parsed (ord < 0), ignore the Pod.
 	}
+	// offline pods also consided in condemned list
+	condemned = append(condemned, offlined...)
 
 	// for any empty indices in the sequence [0,set.Spec.Replicas) create a new Pod at the correct revision
 	for ord := 0; ord < replicaCount; ord++ {
+		if offlineOrdinalSet.Has(ord) {
+			klog.V(4).Infof("pod '%s/%s' marked as offline, skip create", set.GetNamespace(), getPodName(set, ord))
+			continue
+		}
 		if replicas[ord] == nil {
 			replicas[ord] = newVersionedStatefulSetPod(
 				currentSet,
@@ -355,6 +381,10 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	// find the first unhealthy Pod
 	for i := range replicas {
+		if offlineOrdinalSet.Has(i) {
+			klog.V(4).Infof("pod '%s/%s' marked as offline, skip check healthy", set.GetNamespace(), getPodName(set, i))
+			continue
+		}
 		if !isHealthy(replicas[i]) {
 			unhealthy++
 			if ord := getOrdinal(replicas[i]); ord < firstUnhealthyOrdinal {
@@ -392,6 +422,10 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 	// Examine each replica with respect to its ordinal
 	for i := range replicas {
+		if offlineOrdinalSet.Has(i) {
+			klog.V(4).Infof("pod '%s/%s' marked as offline, skip examine", set.GetNamespace(), getPodName(set, i))
+			continue
+		}
 		// delete and recreate failed pods
 		if isFailed(replicas[i]) {
 			ssc.recorder.Eventf(set, v1.EventTypeWarning, "RecreatingFailedPod",
@@ -485,8 +519,8 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	// At this point, all of the current Replicas are Running and Ready, we can consider termination.
 	// We will wait for all predecessors to be Running and Ready prior to attempting a deletion.
 	// We will terminate Pods in a monotonically decreasing order over [len(pods),set.Spec.Replicas).
-	// Note that we do not resurrect Pods in this interval. Also not that scaling will take precedence over
-	// updates.
+	// Note that we do not resurrect Pods in this interval. Also not that scaling and offlining
+	// will take precedence over updates.
 	for target := len(condemned) - 1; target >= 0; target-- {
 		// wait for terminating pods to expire
 		if isTerminating(condemned[target]) {
@@ -517,6 +551,9 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 
 		if err := ssc.podControl.DeleteStatefulPod(set, condemned[target]); err != nil {
 			return &status, err
+		}
+		if offlineOrdinalSet.Has(target) {
+			status.OfflinedReplicas++
 		}
 		if getPodRevision(condemned[target]) == currentRevision.Name {
 			status.CurrentReplicas--
@@ -558,7 +595,7 @@ func (ssc *defaultStatefulSetControl) updateStatefulSet(
 	}
 
 	var unavailablePods []string
-	updateIndexes := sortPodsToUpdate(set.Spec.UpdateStrategy.RollingUpdate, updateRevision.Name, replicas)
+	updateIndexes := sortPodsToUpdate(set.Spec.UpdateStrategy.RollingUpdate, updateRevision.Name, replicas, offlineOrdinalSet)
 	klog.V(5).Infof("Prepare to update pods indexes %v for StatefulSet %s", updateIndexes, getStatefulSetKey(set))
 
 	// update pods in sequence

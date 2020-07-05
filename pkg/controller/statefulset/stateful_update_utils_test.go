@@ -24,6 +24,7 @@ import (
 	apps "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
 )
 
 func TestSortPodsToUpdate(t *testing.T) {
@@ -81,7 +82,7 @@ func TestSortPodsToUpdate(t *testing.T) {
 	}
 
 	for i, tc := range cases {
-		res := sortPodsToUpdate(tc.strategy, tc.updateRevision, tc.replicas)
+		res := sortPodsToUpdate(tc.strategy, tc.updateRevision, tc.replicas, sets.NewInt())
 		if !reflect.DeepEqual(res, tc.expected) {
 			t.Fatalf("case #%d failed, expected %v, got %v", i, tc.expected, res)
 		}

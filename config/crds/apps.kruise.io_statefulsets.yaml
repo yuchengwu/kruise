@@ -21,6 +21,10 @@ spec:
     description: The number of pods updated.
     name: UPDATED
     type: integer
+  - JSONPath: .status.offlinedReplicas
+    description: The number of pods offlined.
+    name: OFFLINED
+    type: integer
   - JSONPath: .status.readyReplicas
     description: The number of pods ready.
     name: READY
@@ -4690,6 +4694,11 @@ spec:
                 which is updated on mutation by the API Server.
               format: int64
               type: integer
+            offlinedReplicas:
+              description: OfflinedReplicas is the number of Pods offlined by the
+                StatefulSet controller.
+              format: int32
+              type: integer
             readyReplicas:
               description: readyReplicas is the number of Pods created by the StatefulSet
                 controller that have a Ready Condition.
@@ -4711,6 +4720,7 @@ spec:
               type: integer
           required:
           - currentReplicas
+          - offlinedReplicas
           - readyReplicas
           - replicas
           - updatedReplicas

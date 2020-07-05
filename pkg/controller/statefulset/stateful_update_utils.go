@@ -20,9 +20,15 @@ import (
 	appsv1alpha1 "github.com/openkruise/kruise/pkg/apis/apps/v1alpha1"
 	"github.com/openkruise/kruise/pkg/util/updatesort"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/sets"
+	"k8s.io/klog"
 )
 
-func sortPodsToUpdate(rollingUpdateStrategy *appsv1alpha1.RollingUpdateStatefulSetStrategy, updateRevision string, replicas []*v1.Pod) []int {
+func sortPodsToUpdate(
+	rollingUpdateStrategy *appsv1alpha1.RollingUpdateStatefulSetStrategy,
+	updateRevision string,
+	replicas []*v1.Pod,
+	offlineOrdinalSet sets.Int) []int {
 	var updateMin int
 	if rollingUpdateStrategy != nil && rollingUpdateStrategy.Partition != nil {
 		updateMin = int(*rollingUpdateStrategy.Partition)
@@ -31,6 +37,10 @@ func sortPodsToUpdate(rollingUpdateStrategy *appsv1alpha1.RollingUpdateStatefulS
 	if rollingUpdateStrategy == nil || rollingUpdateStrategy.UnorderedUpdate == nil {
 		var indexes []int
 		for target := len(replicas) - 1; target >= updateMin; target-- {
+			if offlineOrdinalSet.Has(target) {
+				klog.V(4).Infof("pod ordinal '%d' marked as offline, skip updating", target)
+				continue
+			}
 			indexes = append(indexes, target)
 		}
 		return indexes
@@ -45,6 +55,10 @@ func sortPodsToUpdate(rollingUpdateStrategy *appsv1alpha1.RollingUpdateStatefulS
 	var updatedIdxs []int
 	var waitUpdateIdxs []int
 	for target := len(replicas) - 1; target >= 0; target-- {
+		if offlineOrdinalSet.Has(target) {
+			klog.V(4).Infof("pod ordinal '%d' marked as offline, skip updating", target)
+			continue
+		}
 		if isTerminating(replicas[target]) {
 			updatedIdxs = append(updatedIdxs, target)
 		} else if getPodRevision(replicas[target]) == updateRevision {

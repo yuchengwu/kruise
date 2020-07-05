@@ -20,6 +20,7 @@ package statefulset
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -34,6 +35,15 @@ import (
 	podutil "k8s.io/kubernetes/pkg/api/v1/pod"
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/controller/history"
+)
+
+const (
+
+	// offlineOrdinalAnnotationKey indicates offline pod ordinals, the key's value expects to be a integer list, e.g. "[1,2]".
+	// statefulset treats a offline ordianl as a dummy placeholders, it no longer monitors the corresponding pod,
+	// operations such as delete/update on the offline pod has no affect on statefulset, a offlined pod is a condemed pod and
+	// will be deleted
+	offlineOrdinalAnnotationKey = "offline-pod.kruise.io/ordinal-list"
 )
 
 var patchCodec = scheme.Codecs.LegacyCodec(appsv1alpha1.SchemeGroupVersion)
@@ -459,4 +469,26 @@ func getStatefulSetKey(o metav1.Object) string {
 func isInPlaceOnly(set *appsv1alpha1.StatefulSet) bool {
 	return set.Spec.UpdateStrategy.RollingUpdate != nil &&
 		set.Spec.UpdateStrategy.RollingUpdate.PodUpdatePolicy == appsv1alpha1.InPlaceOnlyPodUpdateStrategyType
+}
+
+// ordinalSliceFromAnnotation first unmarshals string value statefulset.annotation[offlineOrdinalAnnotationKey]
+// into a int[] slice, then filter out elements whose value not in the range [0,replicas), returns filtered slice and error, if any.
+// e.g. suppose replicas=3, "[1,2,3]" returns ([]int{1,2},nil), invalild list format like "1,2" returns ([]int{},err)
+func ordinalSliceFromAnnotation(anno map[string]string, replicas int) ([]int, error) {
+	ordinalSlice := []int{}
+	if anno == nil {
+		return ordinalSlice, nil
+	}
+	if ordinalSliceStr, exists := anno[offlineOrdinalAnnotationKey]; exists {
+		if err := json.Unmarshal([]byte(ordinalSliceStr), &ordinalSlice); err != nil {
+			return nil, err
+		}
+	}
+	for i := range ordinalSlice {
+		// TODO: consider validating on admission phase
+		if ordinalSlice[i] < 0 {
+			return ordinalSlice, errors.New("ordinals expect non-negative value")
+		}
+	}
+	return ordinalSlice, nil
 }
